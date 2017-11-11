@@ -226,6 +226,7 @@ struct RASPIVID_STATE_S
    int settings;                        /// Request settings from the camera
    int sensor_mode;			            /// Sensor mode. 0=auto. Check docs/forum for modes selected by other values.
    int intra_refresh_type;              /// What intra refresh type to use. -1 to not set.
+   int slicing;                         /// Number of Slices per Frame.
    int frame;
    char *pts_filename;
    int save_pts;
@@ -323,6 +324,7 @@ static void display_valid_parameters(char *app_name);
 #define CommandRaw          32
 #define CommandRawFormat    33
 #define CommandNetListen    34
+#define CommandSlicing	    35
 
 static COMMAND_LIST cmdline_commands[] =
 {
@@ -364,6 +366,7 @@ static COMMAND_LIST cmdline_commands[] =
    { CommandRaw,           "-raw",        "r",  "Output filename <filename> for raw video", 1 },
    { CommandRawFormat,     "-raw-format", "rf", "Specify output format for raw video. Default is yuv", 1},
    { CommandNetListen,     "-listen",     "l", "Listen on a TCP socket", 0},
+   { CommandSlicing,       "-slicing",    "sl", "Set slicing to n slices per frame", 1},
 };
 
 static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
@@ -440,7 +443,7 @@ static void default_status(RASPIVID_STATE *state)
    state->save_pts = 0;
 
    state->netListen = false;
-
+   state->slicing = -1;
 
    // Setup preview window defaults
    raspipreview_set_defaults(&state->preview_parameters);
@@ -925,6 +928,13 @@ static int parse_cmdline(int argc, const char **argv, RASPIVID_STATE *state)
 
          break;
       }
+
+      case CommandSlicing:
+        if (sscanf(argv[i + 1], "%u", &state->slicing) != 1)
+            valid = 0;
+         else
+            i++;
+         break;
 
       default:
       {
@@ -2192,6 +2202,21 @@ static MMAL_STATUS_T create_encoder_component(RASPIVID_STATE *state)
    {
       vcos_log_error("failed to set INLINE VECTORS parameters");
       // Continue rather than abort..
+   }
+
+   //set slicing
+   if (state->encoding == MMAL_ENCODING_H264&&
+       state->slicing > 1)
+   {
+      int slicing_tmp = ((state->height/16) + (state->height % 16 != 0));
+      slicing_tmp = (slicing_tmp/state->slicing) + (slicing_tmp % state->slicing != 0);
+      MMAL_PARAMETER_UINT32_T param = {{ MMAL_PARAMETER_MB_ROWS_PER_SLICE, sizeof(param)}, slicing_tmp};
+      status = mmal_port_parameter_set(encoder_output, &param.hdr);
+      if (status != MMAL_SUCCESS)
+      {
+         vcos_log_error("Unable to set slicing");
+         goto error;
+      }
    }
 
    // Adaptive intra refresh settings
